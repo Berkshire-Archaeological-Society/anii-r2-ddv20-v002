@@ -4,7 +4,7 @@
 # provides callable functions for Anvil Webapp
 # this is now in a github repository https://github.com/Berkshire-Archaeological-Society/anii-r2-server.git
 ##
-# Version 014
+# Version 021
 ##
 # Author: Tony Bakker
 #
@@ -41,8 +41,8 @@ import anvil.tables.query as q
 import anvil.secrets
 import anvil.media
 import anvil.pdf
-from anvil.pdf import PDFRenderer
-#from anvil.pdf import PdfRenderer
+#from anvil.pdf import PDFRenderer
+from anvil.pdf import PdfRenderer
 from anvil.tables import app_tables
 
 ############# Defining all the Functions #############
@@ -140,7 +140,7 @@ def table_update(table_name,table):
       msg = table_name + " " + table_name_id + " " + row[table_name_id] + " update to database failed: " + msg
       logmsg("ERROR", msg)
     message = message + msg + "\n"
-  
+
   return message
 
 def table_insert(table_name,table):
@@ -149,11 +149,12 @@ def table_insert(table_name,table):
   # (table_name is used to generate the table_name_id (capitalize, strip last char and add Id, e.g. Table_name = Contexts, table_name_id will be ContextId))
   # table is a pandas dataframe 
   #
+  logmsg("DEBUG","Entering table_insert")
   logmsg("DEBUG",table)
   conn.ping(reconnect=True)
   table.replace({np.nan: None},inplace=True)
   table.replace(r'^\s+$', None, regex=True,inplace=True)
-  
+
   if table_name == "siteuserrole":
     # special case for siteuserrole table
     # set table_name_id to Email and make Email Column values all lowercase
@@ -165,7 +166,7 @@ def table_insert(table_name,table):
   else:
     # all other tables will have the table_name_id set to "<table_name>Id"
     table_name_id = table_name.capitalize() + "Id"
-  
+
   cols = "`,`".join([str(i) for i in table.columns.tolist()])
 
   cur = conn.cursor()
@@ -176,6 +177,8 @@ def table_insert(table_name,table):
   records = table.to_dict('records')
 
   for row in records:
+    logmsg("DEBUG","New row:")
+    logmsg("DEBUG",row)
     if table_name == "siteuserrole":
       # special case for siteuserrole table
       # check if Email is registered in Anvil users table
@@ -190,18 +193,24 @@ def table_insert(table_name,table):
     logmsg("DEBUG",sql_cmd)
     logmsg("DEBUG",list(row.values()))
     try:
-       ret = cur.execute(sql_cmd,list(row.values()))
-       logmsg("DEBUG",ret)
-       conn.commit()
-       msg = "OK. " + table_name + " " + table_name_id + " " + row[table_name_id] + " successfully inserted."
-       logmsg("INFO",msg)
+      ret = cur.execute(sql_cmd,list(row.values()))
+      logmsg("DEBUG",ret)
+      conn.commit()
+      row_id = row.get(table_name_id, "N/A")
+      msg = f"OK. {table_name} {table_name_id} {row_id} successfully inserted."
+      logmsg("INFO",msg)
     except pymysql.Error as err:
-      msg = format(err)
-      msg = table_name + " " + table_name_id + " " + row[table_name_id] + " insert to database failed: " + msg
+      err_msg = format(err)
+      logmsg("DEBUG",err_msg)
+      # .get() prevents KeyError; f-strings handle non-string data types safely
+      row_id = row.get(table_name_id, "<unknown id>") 
+      msg = f"{table_name} {table_name_id} {row_id} insert to database failed: {err_msg}"
       logmsg("ERROR", msg)
-      msg = "ERROR. " + msg
-    message = message + msg + "\n"
-  
+      msg = f"ERROR. {msg}"
+
+    message += msg + "\n"
+
+  logmsg("DEBUG","Exiting table_insert")
   return message
 
 # ------------------------
@@ -222,11 +231,11 @@ def user_authentication():
   user = anvil.users.get_user()
   ip_address = str(anvil.server.context.client.ip)
   msg = "Login connection from " + ip_address + ", User " + str(user['email'])
-  
+
   # Check MariaDB for user authorisation (i.e. which role has the person in accessing the DB)
   # This role will the set in the Anvil user table, which can then be checked in the client and server by a simple call to 
   # anvil.users.get_user(), although to always check this form the server (more secure and accurate)
-  
+
   logmsg("INFO",msg)
   return ip_address
 
@@ -265,7 +274,7 @@ def create_csv(data_list,col_order,csv_name):
   # create the column order list from col_order
   if col_order is not None:
     col_list = sorted(list(col_order[0].keys()),key=lambda x: col_order[0][x])
-  
+
   # check if data_list is empty
   if len(data_list) == 0:
     # data_list is empty so need to create at least a empty list with Columns Headings
@@ -273,7 +282,7 @@ def create_csv(data_list,col_order,csv_name):
     for column_name in col_list:
       data[column_name] = None
     data_list = [data]
-  
+
   # Create Pandas DataFrame
   df_tmp = pd.DataFrame(data_list) 
 
@@ -282,7 +291,7 @@ def create_csv(data_list,col_order,csv_name):
     df_tmp.drop("DBAcontrol",axis='columns',inplace=True)
   if "DBAcontrol" in col_list:
     col_list.remove("DBAcontrol")
- 
+
   # remove the select comlun
   if "select" in df_tmp.columns:
     df_tmp.drop("select",axis='columns',inplace=True)
@@ -298,19 +307,19 @@ def create_csv(data_list,col_order,csv_name):
   # Automatically converts to the best possible types
   #logmsg("DEBUG",df.dtypes)
   df = df.convert_dtypes()
-  
+
   # convert pandas dataframe to string (cannot send all datatypes to client so best to make all of type string)
   # pdf_result = pdf_result.mask(pdf_result.astype(str).eq('None') & df.isna(), '')
   df = df.astype('str')
-      
+
   # make all None values empty string (otherwise they will be sent to client as 'None' string, which is not good for client side processing)
   df.replace(to_replace='None', value='',inplace=True)
   df.replace(to_replace='<NA>', value='',inplace=True)
-  
+
   # 2. Get the CSV content as a string
   # Use .encode('utf-8') to convert the string to bytes, which BlobMedia requires
   csv_bytes = df.to_csv(index=False).encode('utf-8')
-  
+
   # 3. Create the Anvil Media Object
   # - 'text/csv' is the MIME type for a CSV file.
   # - csv_bytes is the content.
@@ -334,8 +343,8 @@ def print_form(form,site_id,table_name,action,data_list,page_info):
   #print("In print form")
   #print(site_id, table_name, action)
   #print(data_list)
-#  pdf_form = PdfRenderer(filename='Anchurus_list_form.pdf',landscape=True,page_size='A3').render_form(form,site_id,table_name,data_list,action,page_info)
-  pdf_form = PDFRenderer(filename='Anchurus_list_form.pdf',landscape=True,page_size='A3').render_form(form,site_id,table_name,data_list,action,page_info)
+  pdf_form = PdfRenderer(filename='Anchurus_list_form.pdf',landscape=True,page_size='A3').render_form(form,site_id,table_name,data_list,action,page_info)
+  #  pdf_form = PDFRenderer(filename='Anchurus_list_form.pdf',landscape=True,page_size='A3').render_form(form,site_id,table_name,data_list,action,page_info)
   return pdf_form
 
 @anvil.server.callable
@@ -366,15 +375,15 @@ def save_workareas(name,work_areas_dict,site_id):
   rows = app_tables.saved_workareas.search(q.all_of(name=name,email=user["email"]))
   for row in rows:
     row.delete()
-  
+
   # now save the new list of work_areas
   msg = ""
   try:
     app_tables.saved_workareas.add_row(name=name,
-                                      datetime=date_time,
-                                      email=user["email"],
-                                      site=site_id,
-                                      workarea_dict=work_areas_dict)
+                                       datetime=date_time,
+                                       email=user["email"],
+                                       site=site_id,
+                                       workarea_dict=work_areas_dict)
     msg = msg + "OK: saved workarea " + name + "\n"
   except Exception as e:
     msg = msg + "ERROR: error saving workarea " + name + ": " + str(e) + "\n"
@@ -408,7 +417,7 @@ def send_email(subject,body,recipient,from_address=None):
 
   msg = "Sent email to " + recipient + ". Subj: " + subject + ". From: " + from_address
   logmsg("DEBUG",msg)
-    
+
   return 
 
 # --------------------------------------------------
@@ -443,7 +452,7 @@ def execute_sql_command(sql_cmd):
 
         # Automatically converts to the best possible types
         pdf_result = pdf_result.convert_dtypes()
-      
+
         # 1. Identify numeric columns (int and float) - replace NaN with 0
         num_cols = pdf_result.select_dtypes(include=['number']).columns
         pdf_result[num_cols] = pdf_result[num_cols].fillna(0)
@@ -451,10 +460,10 @@ def execute_sql_command(sql_cmd):
         # 2. Identify object/string columns - replace NaN with empty string
         obj_cols = pdf_result.select_dtypes(exclude=['number']).columns
         pdf_result[obj_cols] = pdf_result[obj_cols].fillna('')
-      
+
         # convert pandas dataframe to string (cannot send all datatypes to client so best to make all of type string)
         pdf_result_str = pdf_result.astype('str')
-      
+
         # make all None values empty string (otherwise they will be sent to client as 'None' string, which is not good for client side processing)
         pdf_result_str.replace(to_replace='None', value='',inplace=True)
         pdf_result_str.replace(to_replace='<NA>', value='',inplace=True)
@@ -527,7 +536,7 @@ def db_get_summary(site_id):
           list.append(item["table_name"] + " - " + str(count))
     except Exception as e:
       logmsg("ERROR",f"{e}")
-    
+
     msg = "DB summary requested."
     logmsg("INFO",msg)
   return list
@@ -1362,12 +1371,13 @@ def import_file(table_name,file):
           table['RegistrationDate'] = registrationdate.strftime('%Y-%m-%d %H:%M:%S')
           # strip spaces and convert Email field to lowercase
           table["Email"] = table["Email"].str.strip().str.lower()
-        logmsg("DEBUG",table)
+
         message = table_insert(table_name,table)
         logmsg("DEBUG",message)
         nr_of_rows = len(message.splitlines(False))
         nr_of_ok = message.count("OK.")
         ret_msg = "Change ID: " + DBAcontrol + "\n" + message + str(nr_of_rows) + " rows processed. " + str(nr_of_ok) + " rows successfully inserted.\n"
+        logmsg("INFO",ret_msg)
       else:
         # special case for system users table
         # strip spaces and convert email field to lowercase
@@ -1381,6 +1391,7 @@ def import_file(table_name,file):
           else:
             msg = "ERROR: Invalid systemrole for user " + row["email"] + ": " + row["systemrole"]
           ret_msg = ret_msg + msg + "\n"
+        logmsg("INFO",ret_msg)
     except:
       ret_msg = "Error reading import file for table " + table_name + "\n"
     return ret_msg
